@@ -1,0 +1,22 @@
+# Paper outputs (generated per-project, not distributable)
+paper-notes/
+
+# PDF files
+*.pdf
+
+# Extracted images (large binaries)
+images/
+figures/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
