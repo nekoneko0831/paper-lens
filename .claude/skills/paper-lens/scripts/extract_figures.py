@@ -75,8 +75,11 @@ def extract_vector_figures(doc, output_dir, dpi=200, min_size=100, padding=30):
     1. cluster_drawings() 检测矢量路径簇 → 合并相邻簇 → 加 padding 渲染
     2. 对比 caption 位置：如果检测到的矢量簇宽度不足页面 60%，但同页有
        Figure/Table caption，尝试用全页宽重新裁切（处理跨栏大图）
+
+    返回 (figures_list, covered_xrefs)，covered_xrefs 是被矢量图区域覆盖的嵌入图片 xref 集合。
     """
     figures = []
+    covered_xrefs = set()  # 记录被矢量图区域覆盖的嵌入图片 xref，用于去重
     page_width_threshold = 0.6  # 如果图宽 < 页宽的 60%，可能是跨栏图被截了
 
     for page_num in range(len(doc)):
@@ -92,21 +95,29 @@ def extract_vector_figures(doc, output_dir, dpi=200, min_size=100, padding=30):
 
             # 尝试将嵌入图片的位置也纳入合并
             img_rects = []
+            img_xref_map = {}  # rect → xref 映射，用于追踪哪些嵌入图片被矢量图覆盖
             for img in page.get_images(full=True):
                 for r in page.get_image_rects(img[0]):
                     if r.width >= 20 and r.height >= 20:
                         img_rects.append(r)
+                        img_xref_map[id(r)] = img[0]
 
             for idx, rect in enumerate(merged):
                 # 合并附近的嵌入图片位置
-                combined = [rect] + [r for r in img_rects
-                                     if abs(r.y0 - rect.y0) < rect.height * 1.2
-                                     and r.x0 < rect.x1 + 50]
+                nearby_img_rects = [r for r in img_rects
+                                    if abs(r.y0 - rect.y0) < rect.height * 1.2
+                                    and r.x0 < rect.x1 + 50]
+                combined = [rect] + nearby_img_rects
                 if len(combined) > 1:
                     union = fitz.Rect(combined[0])
                     for r in combined[1:]:
                         union = union | r
                     rect = union
+                    # 记录被矢量图覆盖的嵌入图片 xref
+                    for r in nearby_img_rects:
+                        xref = img_xref_map.get(id(r))
+                        if xref is not None:
+                            covered_xrefs.add(xref)
 
                 # 如果图很窄但页上有 caption，可能是跨栏图被截了
                 if rect.width < page_w * page_width_threshold and captions:
@@ -135,16 +146,19 @@ def extract_vector_figures(doc, output_dir, dpi=200, min_size=100, padding=30):
                     "pixel_w": pix.width, "pixel_h": pix.height
                 })
         except Exception as e:
-            if os.environ.get("PAPER_LENS_DEBUG"):
-                print(f"  警告：第{page_num+1}页矢量图提取失败: {e}", file=sys.stderr)
+            print(f"  [警告] 第 {page_num+1} 页矢量图提取失败: {e}", file=sys.stderr)
             continue
-    return figures
+    return figures, covered_xrefs
 
 
-def extract_embedded_images(doc, output_dir, min_size=100):
-    """提取 PDF 中嵌入的位图（实验结果截图、照片等）。"""
+def extract_embedded_images(doc, output_dir, min_size=100, skip_xrefs=None):
+    """提取 PDF 中嵌入的位图（实验结果截图、照片等）。
+
+    Args:
+        skip_xrefs: 已被矢量图区域覆盖的嵌入图片 xref 集合，跳过这些以避免重复。
+    """
     images = []
-    seen_xrefs = set()
+    seen_xrefs = set(skip_xrefs) if skip_xrefs else set()
     for page_num in range(len(doc)):
         page = doc[page_num]
         for img_idx, img in enumerate(page.get_images(full=True)):
@@ -177,10 +191,12 @@ def main():
 
     print(f"论文共 {len(doc)} 页，开始提取图表...")
 
-    vectors = extract_vector_figures(doc, args.output_dir, dpi=args.dpi)
+    vectors, covered_xrefs = extract_vector_figures(doc, args.output_dir, dpi=args.dpi)
     print(f"  矢量图：{len(vectors)} 张")
+    if covered_xrefs:
+        print(f"  跨类型去重：跳过 {len(covered_xrefs)} 个已被矢量图覆盖的嵌入图片")
 
-    embedded = extract_embedded_images(doc, args.output_dir)
+    embedded = extract_embedded_images(doc, args.output_dir, skip_xrefs=covered_xrefs)
     print(f"  嵌入式位图：{len(embedded)} 张")
 
     doc.close()

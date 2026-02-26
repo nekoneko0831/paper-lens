@@ -1,7 +1,6 @@
 ---
 name: paper-lens
-version: 1.0.0
-description: "Three-mode paper reading assistant (Speed Read / Deep Learn / Present). Triggered when user provides a paper PDF or asks to analyze a paper. | 三模式论文阅读助手：速览(快速消化核心)、学习(大白话深度理解)、展示(准备演讲slides)。"
+description: "三模式论文阅读助手：速览(快速消化核心)、学习(大白话深度理解)、展示(准备演讲slides)。当用户提供论文PDF、要求分析/阅读论文、或说'帮我读这篇论文'时触发。"
 allowed-tools: Read Write Edit Bash
 ---
 
@@ -16,15 +15,7 @@ allowed-tools: Read Write Edit Bash
 | **速览** | 快速判断是否值得深读 | 5分钟 | 一次性输出 |
 | **学习** | 深度理解、实践落地 | 20-40分钟 | 多轮确认 |
 | **展示** | 准备 slides 汇报 | 15-30分钟 | 逐页讨论 |
-
-## 快速开始
-
-用户只需说类似以下任意一句话即可触发：
-- "帮我读这篇论文 <PDF路径或URL>"
-- "分析一下这篇 paper"
-- "/paper-lens"
-- "用速览模式看看这篇论文"
-- "帮我准备这篇论文的 slides"
+| **PDF 导出** | 导出排版精美的 PDF | 1分钟 | 一键导出 |
 
 ---
 
@@ -70,10 +61,9 @@ with open('paper-notes/<name>/extracted-text.md', 'w') as f:
 doc.close()
 "
 
-# 3. 提取图片
-# 脚本位于本 Skill 的 scripts/ 目录，安装位置可能不同
-SCRIPT=$(find . ~/.claude -path "*/paper-lens/scripts/extract_figures.py" 2>/dev/null | head -1)
-python3 "$SCRIPT" \
+# 3. 提取图片（动态定位脚本，兼容不同安装位置）
+EXTRACT_SCRIPT=$(find .claude/skills/paper-lens/scripts ~/.claude/skills/paper-lens/scripts -name "extract_figures.py" 2>/dev/null | head -1)
+python3 "$EXTRACT_SCRIPT" \
     paper-notes/<name>/paper.pdf \
     paper-notes/<name>/images/
 ```
@@ -88,7 +78,8 @@ paper-notes/<paper-name>/
 ├── figures/               # 【展示模式】筛选后的关键图表（重命名为 fig1-xxx.png）
 ├── speed-read.md          # 速览模式输出
 ├── deep-learn.md          # 学习模式输出（增量保存，每步追加）
-└── slides-content.md      # 展示模式输出
+├── slides-content.md      # 展示模式输出
+└── *.pdf                  # PDF 导出（与源 md 同名）
 ```
 
 ### 论文简称命名规则
@@ -161,9 +152,23 @@ paper-notes/<paper-name>/
 
 **关键机制**：
 - **图表映射**：从 `images/` 中识别论文原图（Figure 1, 2, 3...），复制并重命名到 `figures/` 目录（如 `fig1-architecture.png`），方便后续引用
-- **图片嵌入**：slides-content.md 中用 `![描述](figures/xxx.png)` 引用图片，生成 HTML 演示文稿时可将图片 base64 编码嵌入，保证完全自包含
+- **图片嵌入**：slides-content.md 中用 `![描述](figures/xxx.png)` 引用图片，`/frontend-slides` 生成 HTML 时会将图片 base64 编码嵌入，保证演示文稿完全自包含
 
-最终保存到 `paper-notes/<name>/slides-content.md`。提示用户可用 slides 工具（如 `frontend-slides`）生成 HTML 演示文稿，或直接导入 PowerPoint / Google Slides。
+最终保存到 `paper-notes/<name>/slides-content.md`。提示用户可用 `/frontend-slides` 生成 HTML 演示文稿。
+
+### PDF 导出
+
+加载 `references/export-pdf.md` 执行。
+
+**核心体验：一键将任意模式的 md 笔记导出为排版精美的 PDF。**
+
+- 支持三种排版样式：学术风格（academic）、简洁风格（clean）、紧凑风格（compact）
+- 自动嵌入图片（`figures/`、`images/` 目录下的引用图片）
+- LaTeX 公式渲染为数学符号图片（需 matplotlib）
+- 中英混排、表格、代码块均正确渲染
+- 自动添加页码
+
+触发方式：用户说"导出 PDF"、"生成 PDF"、"转 PDF" 等。
 
 ---
 
@@ -198,17 +203,15 @@ paper-notes/<paper-name>/
 - `references/speed-read.md` — 速览模式详细指令和输出模板
 - `references/deep-learn.md` — 学习模式详细指令（名词提取、大白话拆解、公式解读、附录提炼）
 - `references/present.md` — 展示模式详细指令（规划、大纲、逐页确认、输出规范）
+- `references/export-pdf.md` — PDF 导出指令（样式选择、脚本执行）
 - `scripts/extract_figures.py` — 论文图片提取脚本（依赖 PyMuPDF）
-
-## 语言设置
-
-当前版本默认使用中文输出。如需英文输出，可修改：
-1. 本文件中的「通用写作规范」部分
-2. `references/` 中各模式的输出模板
-3. `scripts/extract_figures.py` 的 print 信息（不影响功能）
+- `scripts/md_to_pdf.py` — Markdown → PDF 转换脚本（依赖 PyMuPDF + markdown）
 
 ## 依赖
 
 ```bash
-pip install pymupdf
+# 核心依赖
+pip install pymupdf markdown
+# 推荐（LaTeX 公式渲染为数学符号）
+pip install matplotlib
 ```

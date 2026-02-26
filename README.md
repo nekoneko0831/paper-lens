@@ -31,29 +31,31 @@ A Claude Code skill for reading, understanding, and presenting academic papers �
 **Project-level** (recommended — skill lives inside your project):
 
 ```bash
-# In your project root
-mkdir -p .claude/skills/paper-lens
-cp -r skills/* .claude/skills/paper-lens/
+# Clone the repo, then copy into your project
+git clone https://github.com/nekoneko0831/paper-lens.git /tmp/paper-lens
+cp -r /tmp/paper-lens/.claude/skills/paper-lens <your-project>/.claude/skills/
 ```
 
 **User-level** (available across all projects):
 
 ```bash
-mkdir -p ~/.claude/skills/paper-lens
-cp -r skills/* ~/.claude/skills/paper-lens/
+git clone https://github.com/nekoneko0831/paper-lens.git /tmp/paper-lens
+cp -r /tmp/paper-lens/.claude/skills/paper-lens ~/.claude/skills/
 ```
 
-The `skills/` directory contains:
+The skill directory contains:
 
 ```
-skills/
+.claude/skills/paper-lens/
 ├── SKILL.md                     # Main entry point (mode router + Phase 0 parsing)
 ├── references/
 │   ├── speed-read.md            # Speed Read mode instructions
 │   ├── deep-learn.md            # Deep Learn mode instructions
-│   └── present.md               # Present mode instructions
+│   ├── present.md               # Present mode instructions
+│   └── export-pdf.md            # PDF export instructions
 └── scripts/
-    └── extract_figures.py       # Figure extraction script
+    ├── extract_figures.py       # Figure extraction script
+    └── md_to_pdf.py             # Markdown → PDF conversion script
 ```
 
 ## Usage
@@ -85,7 +87,7 @@ paper-notes/<paper-name>/
 
 ## Optional: HTML Slide Generation
 
-Paper Lens generates `slides-content.md` with figure references. To convert it into a self-contained HTML presentation with base64-embedded images, use the companion [frontend-slides](https://github.com/anthropics/courses) skill or any Markdown-to-slides tool.
+Paper Lens generates `slides-content.md` with figure references. To convert it into a self-contained HTML presentation with base64-embedded images, use a slides generation skill (e.g., `frontend-slides` for Claude Code) or any Markdown-to-slides tool.
 
 ## Examples
 
@@ -149,16 +151,16 @@ Paper Lens 提供三种「镜头」来阅读论文，覆盖从快速消化到深
 **项目级安装**（推荐）：
 
 ```bash
-# 在你的项目根目录
-mkdir -p .claude/skills/paper-lens
-cp -r skills/* .claude/skills/paper-lens/
+# 克隆仓库后，将 skill 目录复制到你的项目中
+git clone https://github.com/nekoneko0831/paper-lens.git /tmp/paper-lens
+cp -r /tmp/paper-lens/.claude/skills/paper-lens <你的项目>/.claude/skills/
 ```
 
 **用户级安装**（所有项目通用）：
 
 ```bash
-mkdir -p ~/.claude/skills/paper-lens
-cp -r skills/* ~/.claude/skills/paper-lens/
+git clone https://github.com/nekoneko0831/paper-lens.git /tmp/paper-lens
+cp -r /tmp/paper-lens/.claude/skills/paper-lens ~/.claude/skills/
 ```
 
 ## 依赖
