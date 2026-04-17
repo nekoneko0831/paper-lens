@@ -35,7 +35,7 @@ try:
     import matplotlib.pyplot as plt
     _HAS_MATPLOTLIB = True
 except ImportError:
-    pass
+    print("提示：未安装 matplotlib，LaTeX 公式将以文本形式显示。安装命令：pip install matplotlib", file=sys.stderr)
 
 
 def render_latex_to_base64(latex_str, fontsize=13, dpi=180, display=False):
@@ -100,7 +100,7 @@ def preprocess_latex(md_text):
         b64 = render_latex_to_base64(latex, fontsize=14, display=True)
         if b64:
             return f'\n<div style="text-align:center;margin:8px 0;"><img src="data:image/png;base64,{b64}" style="max-width:90%;"></div>\n'
-        return f'\n<div style="text-align:center;margin:8px 0;"><code style="font-size:10pt;">{_escape_html(latex)}</code></div>\n'
+        return f'\n<div style="text-align:center;margin:12px 0;padding:10px 16px;background:#f7f9fc;font-family:monospace;font-size:10pt;color:#2d5986;">{_escape_html(latex)}</div>\n'
 
     md_text = re.sub(r"\$\$(.+?)\$\$", replace_display, md_text, flags=re.DOTALL)
 
@@ -112,7 +112,7 @@ def preprocess_latex(md_text):
         b64 = render_latex_to_base64(latex, fontsize=12, display=False)
         if b64:
             return f'<img src="data:image/png;base64,{b64}" style="vertical-align:middle;height:1.2em;">'
-        return f'<code style="font-size:9pt;">{_escape_html(latex)}</code>'
+        return f'<code style="font-size:9pt;color:#2d5986;background:#eef2f7;padding:1px 4px;">{_escape_html(latex)}</code>'
 
     md_text = re.sub(r"(?<!\$)\$(?!\$)(.+?)(?<!\$)\$(?!\$)", replace_inline, md_text)
 
@@ -174,34 +174,39 @@ body {
     font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
     font-size: 10.5pt;
     color: #1a1a2e;
-    line-height: 1.7;
+    line-height: 1.75;
 }
+
+/* 标题层级 */
 h1 {
-    font-size: 20pt;
-    color: #1a1a2e;
-    border-bottom: 2.5px solid #2d5986;
-    padding-bottom: 6px;
-    margin-bottom: 12px;
-    margin-top: 20px;
+    font-size: 22pt;
+    color: #1a3a5c;
+    text-align: center;
+    border-bottom: 3px solid #2d5986;
+    padding-bottom: 8px;
+    margin-bottom: 16px;
+    margin-top: 24px;
 }
 h2 {
     font-size: 15pt;
-    color: #2d5986;
-    border-bottom: 1px solid #d0d7de;
-    padding-bottom: 4px;
-    margin-top: 18px;
-    margin-bottom: 8px;
+    color: #1a3a5c;
+    border-bottom: 2px solid #2d5986;
+    padding-bottom: 5px;
+    margin-top: 28px;
+    margin-bottom: 10px;
 }
 h3 {
     font-size: 12.5pt;
-    color: #2d3748;
-    margin-top: 14px;
+    color: #2d5986;
+    border-left: 3px solid #2d5986;
+    padding-left: 8px;
+    margin-top: 16px;
     margin-bottom: 6px;
 }
 h4 {
     font-size: 11pt;
     color: #4a5568;
-    margin-top: 10px;
+    margin-top: 12px;
     margin-bottom: 4px;
 }
 p {
@@ -212,64 +217,77 @@ strong { color: #1a1a2e; }
 em { color: #4a5568; }
 a { color: #2d5986; }
 
-/* 引用块：论文信息卡片风格 */
+/* 引用块：渐变背景 + 圆角 */
 blockquote {
     border-left: 3px solid #2d5986;
-    background: #f0f4f8;
-    padding: 8px 12px;
-    margin: 8px 0;
+    background: linear-gradient(135deg, #f0f4f8 0%, #e8eef5 100%);
+    padding: 10px 14px;
+    margin: 10px 0;
     color: #2d3748;
     font-size: 9.5pt;
 }
 blockquote p { margin: 2px 0; }
 
-/* 表格 */
+/* 表格：现代无边框风格 */
 table {
     border-collapse: collapse;
     width: 100%;
-    margin: 8px 0;
-    font-size: 9.5pt;
+    margin: 10px 0;
+    font-size: 9pt;
 }
 th {
-    background: #2d5986;
+    background: linear-gradient(135deg, #2d5986 0%, #3a6f9f 100%);
     color: white;
-    border: 1px solid #2d5986;
-    padding: 6px 10px;
+    border: none;
+    padding: 7px 10px;
     text-align: left;
     font-weight: bold;
 }
 td {
-    border: 1px solid #d0d7de;
-    padding: 5px 10px;
+    border: none;
+    border-bottom: 1px solid #e2e8f0;
+    padding: 6px 10px;
 }
 tr:nth-child(even) td {
-    background: #f8f9fa;
+    background: #f7f9fc;
+}
+tr:last-child td {
+    border-bottom: 2px solid #2d5986;
 }
 
-/* 代码 */
+/* 代码：深色主题 */
 code {
     font-family: "SF Mono", "Menlo", "Consolas", monospace;
     font-size: 9pt;
-    background: #f0f0f3;
+    background: #eef2f7;
     padding: 1px 4px;
     color: #c7254e;
 }
 pre {
-    background: #f6f8fa;
-    padding: 10px 12px;
-    margin: 6px 0;
+    background: #1e293b;
+    padding: 12px 14px;
+    margin: 8px 0;
     font-size: 8.5pt;
     line-height: 1.5;
-    border-left: 3px solid #d0d7de;
 }
 pre code {
     background: none;
     padding: 0;
-    color: #1a1a2e;
+    color: #e2e8f0;
 }
 
-/* 列表 */
-ul, ol {
+/* 列表：三角标记 */
+ul {
+    margin: 4px 0 8px 0;
+    padding-left: 20px;
+    list-style: none;
+}
+ul > li::before {
+    content: "\\25b8 ";
+    color: #2d5986;
+    font-size: 8pt;
+}
+ol {
     margin: 4px 0 8px 0;
     padding-left: 20px;
 }
@@ -278,11 +296,12 @@ li {
     line-height: 1.6;
 }
 
-/* 分隔线 */
+/* 分隔线：渐变线 */
 hr {
     border: none;
-    border-top: 1px solid #d0d7de;
-    margin: 12px 0;
+    height: 1px;
+    background: linear-gradient(to right, #2d5986, #d0d7de, transparent);
+    margin: 20px 0;
 }
 
 /* 图片 */

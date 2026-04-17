@@ -1,14 +1,14 @@
 ---
 name: paper-lens
-description: "三模式论文阅读助手：速览(快速消化核心)、学习(大白话深度理解)、展示(准备演讲slides)。当用户提供论文PDF、要求分析/阅读论文、或说'帮我读这篇论文'时触发。"
-allowed-tools: Read Write Edit Bash
+description: "论文阅读助手：速览/学习/展示三模式阅读 + 批量检索/批量下载。当用户提供论文PDF、要求分析/阅读论文、说'帮我读这篇论文'、说'搜索/检索论文'、或粘贴多个arXiv链接时触发。"
+allowed-tools: Read Write Edit Bash WebSearch WebFetch
 ---
 
-# Paper Lens — 三模式论文阅读助手
+# Paper Lens — 论文阅读 & 检索助手
 
-通过三种不同的「镜头」阅读论文，满足不同场景的需求。
+通过不同的「镜头」阅读论文，支持批量检索和下载。
 
-## 三种模式
+## 所有模式
 
 | 模式 | 适合场景 | 耗时 | 交互方式 |
 |------|----------|------|----------|
@@ -16,6 +16,8 @@ allowed-tools: Read Write Edit Bash
 | **学习** | 深度理解、实践落地 | 20-40分钟 | 多轮确认 |
 | **展示** | 准备 slides 汇报 | 15-30分钟 | 逐页讨论 |
 | **PDF 导出** | 导出排版精美的 PDF | 1分钟 | 一键导出 |
+| **批量检索** | 按主题搜索论文 | 3-5分钟 | 表格 + 选择下载 |
+| **批量下载** | 粘贴链接批量下载 | 1-3分钟 | 自动去重下载 |
 
 ---
 
@@ -91,9 +93,17 @@ paper-notes/<paper-name>/
 
 ---
 
-## Phase 1: 模式选择
+## Phase 1: 模式路由
 
-**询问用户**：
+**自动判断模式**（按优先级匹配）：
+
+| 用户输入特征 | 进入模式 | 跳过 Phase 0 |
+|-------------|---------|-------------|
+| 包含「搜索/检索/survey/综述」+ 主题词 | **批量检索** | ✅ 是 |
+| 包含 ≥2 个 arXiv URL 或 arXiv ID | **批量下载** | ✅ 是 |
+| 提供单篇论文 PDF/URL | 进入 Phase 0 → 询问阅读模式 | ❌ 否 |
+
+**阅读模式询问**（单篇论文解析完成后）：
 
 > 论文已解析完成。你想用哪种模式来阅读？
 >
@@ -156,6 +166,26 @@ paper-notes/<paper-name>/
 
 最终保存到 `paper-notes/<name>/slides-content.md`。提示用户可用 `/frontend-slides` 生成 HTML 演示文稿。
 
+### 批量检索模式
+
+加载 `references/batch-search.md` 执行。
+
+**触发**：用户说"搜索 XXX 相关论文"、"检索 coding benchmark"、"帮我找 agent evaluation 的论文"等。
+
+**核心流程**：WebSearch 搜索 arXiv → WebFetch 获取详情 → 生成表格 → 询问是否下载 → 调用批量下载。
+
+输出到 `paper-notes/survey-<主题>/search-results.md`。
+
+### 批量下载模式
+
+加载 `references/batch-download.md` 执行。
+
+**触发**：用户粘贴多个 arXiv 链接/ID，或从批量检索中选择论文。
+
+**核心流程**：提取 URL/ID → 三层去重（输入/本地/arXiv ID）→ 获取标题 → 批量 curl 下载 → 生成汇总表格。
+
+输出到 `paper-notes/batch-<日期>/download-summary.md`。
+
 ### PDF 导出
 
 加载 `references/export-pdf.md` 执行。
@@ -192,9 +222,10 @@ paper-notes/<paper-name>/
 
 - 想象你在给一个聪明但非本领域的朋友解释
 - 先给直觉，再给细节
-- 用生活中的类比来解释抽象概念
+- 类比只用在真正抽象难懂的概念上，简单概念直接技术解释
+- 每个概念最多一个比喻，一击即中，不堆叠多个类比
 - 避免"翻译原文"，要"用自己的话重新讲"
-- 可以用「简单来说」「打个比方」「换句话说」这类过渡语
+- 不连续使用「打个比方」「简单来说」「就像」等过渡语
 
 ---
 
@@ -204,6 +235,8 @@ paper-notes/<paper-name>/
 - `references/deep-learn.md` — 学习模式详细指令（名词提取、大白话拆解、公式解读、附录提炼）
 - `references/present.md` — 展示模式详细指令（规划、大纲、逐页确认、输出规范）
 - `references/export-pdf.md` — PDF 导出指令（样式选择、脚本执行）
+- `references/batch-search.md` — 批量检索指令（WebSearch + WebFetch → 表格）
+- `references/batch-download.md` — 批量下载指令（提取 URL → 去重 → curl 下载）
 - `scripts/extract_figures.py` — 论文图片提取脚本（依赖 PyMuPDF）
 - `scripts/md_to_pdf.py` — Markdown → PDF 转换脚本（依赖 PyMuPDF + markdown）
 

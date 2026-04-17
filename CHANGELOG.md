@@ -1,5 +1,23 @@
 # Changelog
 
+## v1.2.0 (2026-04-17)
+
+### New Features
+- **Batch Search**: Search papers by topic via WebSearch — outputs a ranked table with links, then offers to download selected papers
+- **Batch Download**: Paste multiple arXiv URLs/IDs to download in batch — with 3-layer dedup (input / local / arXiv ID)
+- **Style selection enforcement**: Present mode now requires `/frontend-slides` to ask user for visual style preference (no more silent defaults)
+
+### Improvements
+- Deep Learn mode: "analogy-first" → "analogy-precise" — fewer stacked metaphors, sharper terminology tables (4-column format)
+- Present mode: explicit figure fallback path when `images/` directory is empty
+- PDF export: cross-platform `open` command, LaTeX auto-resize, temp file cleanup
+- Figure extraction: cross-type dedup (vector regions suppress overlapping embedded images)
+- Mode router: auto-detect batch search/download intent from user input (no manual mode selection needed)
+
+## v1.1.0 (2026-02-26)
+
+12 fixes covering scripts, instructions, and README. See git log for details.
+
 ## v1.0.0 (2026-02-26)
 
 Initial open-source release.

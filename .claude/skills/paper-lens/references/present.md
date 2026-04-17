@@ -2,7 +2,7 @@
 
 ## 目标
 
-帮用户准备一场论文讲解的 slides，输出结构化的内容文档，可对接 slides 工具生成**带原文图片**的 HTML 演示文稿，或直接导入 PowerPoint。
+帮用户准备一场论文讲解的 slides，输出结构化的内容文档，可直接对接 `/frontend-slides` 生成**带原文图片**的 HTML 演示文稿。
 
 ## 核心原则
 
@@ -16,31 +16,29 @@
 
 ### Step 1: 展示规划
 
-**询问用户以下信息**：
+**用 AskUserQuestion 工具一次性收集所有信息**（必须用工具，不要输出纯文本提问）：
 
-```markdown
-在开始制作 slides 之前，我需要了解几个信息：
+调用 AskUserQuestion，questions 数组包含以下 4 个问题：
 
-1. **演讲场景**：这是什么场合？
-   - 组会/读书会（轻松，可以讨论细节）
-   - 学术会议（正式，时间严格）
-   - 答辩（需要展示理解深度）
-   - 团队分享（面向非专业听众）
+1. **演讲场景**（单选）
+   - question: "演讲场景——这是什么场合？"
+   - options: 组会/读书会（轻松，可讨论细节）| 学术会议（正式，时间严格）| 答辩（展示理解深度）| 团队分享（面向非专业听众）
+   - multiSelect: false
 
-2. **时长**：你有多少分钟？
+2. **时长**（单选）
+   - question: "时长——你有多少分钟？"
+   - options: 5-10分钟 | 15分钟 | 20-30分钟 | 30分钟以上
+   - multiSelect: false
 
-3. **听众背景**：听众对这个领域了解多少？
-   - 专家（同领域研究者）
-   - 有基础（了解 AI/CS 但不是该细分领域）
-   - 非专业（需要更多背景解释）
+3. **听众背景**（单选）
+   - question: "听众背景——听众对这个领域了解多少？"
+   - options: 专家（同领域研究者）| 有基础（了解 AI/CS 但不是该细分领域）| 非专业（需要更多背景解释）
+   - multiSelect: false
 
-4. **重点偏好**：你最想讲清楚哪些部分？（可多选）
-   - 研究动机和问题定义
-   - 核心方法/技术方案
-   - 实验结果和分析
-   - 启示和未来方向
-   - 全部均衡覆盖
-```
+4. **重点偏好**（多选）
+   - question: "重点偏好——你最想讲清楚哪些部分？"
+   - options: 研究动机和问题定义 | 核心方法/技术方案 | 实验结果和分析 | 启示和未来方向 | 全部均衡覆盖
+   - multiSelect: true
 
 **根据用户回答调整策略**：
 
@@ -61,10 +59,9 @@
 
 Phase 0 提取的 `images/` 目录包含所有矢量图和嵌入位图，其中有些是论文原图（Figure/Table），有些是噪声（页面装饰、小图标等）。这一步需要：
 
-1. **读取 `images/manifest.json`**：查看所有提取图片的元信息（页码、类型、尺寸）
-2. **对照论文文本匹配**：结合 `extracted-text.md` 中的 "Figure X" / "Table X" 描述及其所在页码，匹配 manifest 中同页的图片
-3. **必要时查看图片确认**：对不确定的图片用 Read 工具直接查看确认
-4. **筛选复制**：将有价值的图片复制到 `figures/` 目录，并重命名为语义化名称
+1. **扫描 `images/` 目录**：用 Read 工具逐个查看提取的图片
+2. **识别论文原图**：对照论文文本中的 "Figure X" / "Table X" 描述，确认哪些提取图片对应论文中的哪个 Figure/Table
+3. **筛选复制**：将有价值的图片复制到 `figures/` 目录，并重命名为语义化名称
 
 **命名规则**：
 
@@ -236,7 +233,7 @@ cp paper-notes/<name>/images/<source>.png paper-notes/<name>/figures/fig1-<desc>
 
 ## 图片嵌入到 HTML 演示文稿
 
-当用户使用 slides 工具生成 HTML 时，需要将 `figures/` 中的图片嵌入到演示文稿中。
+当用户调用 `/frontend-slides` 生成 HTML 时，需要将 `figures/` 中的图片嵌入到演示文稿中。
 
 ### 嵌入方式：Base64 编码
 
@@ -282,10 +279,12 @@ def img_to_base64(img_path):
 Slides 内容文档已保存到 paper-notes/<name>/slides-content.md
 论文图表已筛选到 paper-notes/<name>/figures/
 
-下一步（可选）：
-1. 如果你安装了 frontend-slides skill，可以用 /frontend-slides 生成 HTML 演示文稿
-2. 或者用任何 Markdown → Slides 工具（Marp、Slidev 等）转换
-3. figures/ 中的图片可以直接拖入 PowerPoint / Google Slides / Keynote
+下一步：你可以用 /frontend-slides 来生成带原文图片的 HTML 演示文稿。
 
-提示：slides-content.md 是标准 Markdown 格式，兼容各种演示工具。
+提示：
+1. 调用 /frontend-slides 后，选择"新建演示文稿"
+2. 提供 slides-content.md 作为内容输入
+3. figures/ 中的图片会被 base64 编码嵌入 HTML，生成完全自包含的单文件
+4. **重要**：确保 /frontend-slides 执行 Phase 2 Style Discovery，必须用 AskUserQuestion 询问用户视觉风格偏好，不得跳过或自动选择
+5. 生成后可以在浏览器中打开预览
 ```
