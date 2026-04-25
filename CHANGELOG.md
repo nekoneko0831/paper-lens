@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.3.0 (2026-04-25)
+
+### New Features
+- **Web UI shipped** — FastAPI backend (`paper-lens-backend/`, port 8765) + Next.js frontend (`paper-lens-web/`, port 3000) are now part of the open-source repo. The CLI skill remains independently usable; the Web UI is opt-in.
+- **Phase -1 environment probe** — On every load the skill probes whether the Web UI is running and prints a one-line hint (no auto-launch, no auto-open). Falls back to pure CLI mode if the Web UI is absent.
+
+### Improvements
+- README: dedicated "Web UI" section with install + run instructions and a clear `sudo` warning.
+- Top-level `.gitignore` now covers Node/Next.js artifacts (`node_modules/`, `.next/`, `*.tsbuildinfo`, etc.) so the repo stays clean for monorepo contributors.
+- `paper-lens-web/.env.local.example` added so users know which env var to set without leaking the maintainer's local config.
+
+### Notes
+- The backend spawns `claude --sdk-url ...` as a subprocess. It inherits the invoking shell's credentials, so the operator must have already completed `claude` `/login`. Do not start the backend with `sudo`.
+
 ## v1.2.0 (2026-04-17)
 
 ### New Features

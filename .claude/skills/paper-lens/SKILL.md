@@ -21,6 +21,60 @@ allowed-tools: Read Write Edit Bash WebSearch WebFetch
 
 ---
 
+## Phase -1: 环境探测（每次 skill 加载时执行）
+
+**核心原则**：**不要主动启动或打开任何浏览器窗口**。只探测 Web UI 是否已在运行，然后一次性告诉用户使用路径。用户如果没跑 Web UI，保持纯 CLI 模式继续。
+
+### Step 1: 轻量探测
+
+```bash
+# 前端（paper-lens-web, Next.js，默认 3000）
+WEB_UI=""
+if curl -s -o /dev/null -w "%{http_code}" http://localhost:3000 2>/dev/null | grep -q "200"; then
+  WEB_UI="http://localhost:3000"
+fi
+
+# 后端（paper-lens-backend, FastAPI，默认 8765）
+BACKEND=""
+if curl -s -o /dev/null -w "%{http_code}" http://localhost:8765/api/papers 2>/dev/null | grep -q "200"; then
+  BACKEND="http://localhost:8765"
+fi
+
+# 是否能在工作目录或 ~/.claude 下找到 paper-lens-web 项目
+HAS_WEB_PROJECT="no"
+if find . ~/.claude -path "*/paper-lens-web/package.json" -not -path "*node_modules*" 2>/dev/null | head -1 | grep -q package.json; then
+  HAS_WEB_PROJECT="yes"
+fi
+
+echo "WEB_UI=$WEB_UI"
+echo "BACKEND=$BACKEND"
+echo "HAS_WEB_PROJECT=$HAS_WEB_PROJECT"
+```
+
+### Step 2: 根据探测结果给出提示（不自动 open）
+
+根据 Step 1 输出，**只输出文字提示，不要执行 `open` 命令**：
+
+| 状态 | 提示内容 |
+|------|---------|
+| `WEB_UI` 和 `BACKEND` 都活 | `Paper Lens Web UI 已在运行 · http://localhost:3000 · 你可以打开浏览器继续，或继续在这里对话。` |
+| 只有 `BACKEND` | `后端已运行。如果想用浏览器界面，在另一个终端运行 cd paper-lens-web && npm run dev` |
+| `HAS_WEB_PROJECT=yes` 但两者都不活 | `可选：在两个终端分别运行 cd paper-lens-backend && python3 server.py（后端）和 cd paper-lens-web && npm run dev（前端）启动 Web UI。或者继续在这里对话。` |
+| `HAS_WEB_PROJECT=no` | 纯 CLI 模式，不提示 Web UI（如果想试 Web UI，可以 clone https://github.com/nekoneko0831/paper-lens 仓库，里面包含 paper-lens-web 和 paper-lens-backend） |
+
+### Step 3: 绝对禁止
+
+- ❌ **绝对不要** 运行 `nohup python3 server.py &` 或任何后台启动命令
+- ❌ **绝对不要** 运行 `open http://...` 或 `open -a Safari ...`
+- ❌ **绝对不要** 把"探测完成"当作一个已完成任务（它不是任务，只是环境检查）
+- ❌ **绝对不要** 在 Phase -1 阶段创建 Task 条目
+
+### Step 4: 继续正常流程
+
+如果用户附带了论文参数（路径/URL），直接进入 Phase 0 解析论文。否则等待用户指令。
+
+---
+
 ## Phase 0: 论文解析（所有模式共用）
 
 ### 0.1 获取论文 PDF
