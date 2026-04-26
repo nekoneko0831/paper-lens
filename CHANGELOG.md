@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.3.1 (2026-04-26)
+
+### Bug fixes
+- **Backend session reaper killed mid-turn sessions.** `SESSION_TTL_SECONDS` was 600s, and the `last_active` timestamp only got refreshed by HTTP endpoints (`start-session`, `/api/stream`, `/api/answer`) and the initial CLI WebSocket connect — *not* by individual CLI WS frames flowing through. So in long deep-learn turns where Claude was actively producing output (or parked on AskUserQuestion waiting for user input) the cleanup task could reap the session mid-flight. The user's next `POST /api/answer/{sid}` then 404'd with no obvious cause.
+  - Fix: cleanup now skips any session whose `_cli_ws is not None` — i.e. while the CLI subprocess is still attached to its WebSocket, the session is treated as live regardless of the timestamp.
+  - Defense-in-depth: bump default TTL from 600s → 1800s (30 min) so genuine idle sessions still get garbage-collected, but normal multi-step turns and AskUserQuestion think-time fit comfortably inside the window.
+
 ## v1.3.0 (2026-04-25)
 
 ### New Features

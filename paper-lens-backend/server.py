@@ -34,19 +34,27 @@ SERVER_PORT = int(os.environ.get("PORT", 8765))
 
 # Active sessions: session_id -> (adapter, last_active_timestamp)
 sessions: dict[str, tuple[SdkUrlAdapter, float]] = {}
-SESSION_TTL_SECONDS = 600  # 10 minutes
+SESSION_TTL_SECONDS = 1800  # 30 minutes — covers long deep-learn turns + AskUserQuestion think time
 
 
 # ── Session cleanup ───────────────────────────────────────────────────
 
 async def _cleanup_expired_sessions() -> None:
-    """Periodically remove sessions older than SESSION_TTL_SECONDS."""
+    """Periodically remove sessions older than SESSION_TTL_SECONDS.
+
+    Sessions with an active CLI WebSocket are skipped: while Claude is
+    actively producing output (or parked on AskUserQuestion waiting for
+    user input), the CLI stays connected to /ws/cli/{sid} but does not
+    hit any HTTP endpoint, so its last_active timestamp would otherwise
+    age past TTL and the session would be reaped mid-turn.
+    """
     while True:
         await asyncio.sleep(60)  # check every minute
         now = time.time()
         expired = [
             sid for sid, (adapter, ts) in sessions.items()
             if now - ts > SESSION_TTL_SECONDS
+            and getattr(adapter, "_cli_ws", None) is None
         ]
         for sid in expired:
             adapter, _ = sessions.pop(sid)
