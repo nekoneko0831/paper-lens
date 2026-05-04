@@ -123,10 +123,13 @@ class TestEventParsing:
             }
         }
         events = self.adapter._parse_event(data)
-        # Should only have FILE_SAVED (no new_turn, no TEXT_DELTA)
-        assert len(events) == 1
+        # Should have FILE_SAVED plus a TOOL_USE update carrying the final input
+        # (no new_turn, no TEXT_DELTA).
+        assert len(events) == 2
         assert events[0].type == EventType.FILE_SAVED
         assert events[0].data["path"] == "/path/to/file.md"
+        assert events[1].type == EventType.TOOL_USE
+        assert events[1].data["tool"] == "Write"
 
     def test_streaming_assistant_ask_user_question(self):
         """AskUserQuestion is still extracted from assistant event in streaming mode."""
@@ -183,8 +186,7 @@ class TestEventParsing:
         }
         events = self.adapter._parse_event(data)
         assert len(events) == 1
-        assert events[0].type == EventType.STATUS
-        assert events[0].data["status"] == "completed"
+        assert events[0].type == EventType.TURN_DONE
 
     def test_parse_unknown_event_returns_empty(self):
         data = {"type": "rate_limit_event", "rate_limit_info": {}}
@@ -216,7 +218,7 @@ class TestEventParsing:
         e3 = adapter._parse_event({
             "type": "stream_event",
             "event": {"type": "content_block_start",
-                      "content_block": {"type": "tool_use", "name": "Read"}}
+                      "content_block": {"type": "tool_use", "name": "Read", "id": "tool-1"}}
         })
         assert e3[0].type == EventType.TOOL_USE
 
@@ -225,14 +227,16 @@ class TestEventParsing:
             "type": "assistant",
             "message": {"content": [
                 {"type": "text", "text": "Let me read"},
-                {"type": "tool_use", "name": "Read", "input": {"file_path": "/tmp/x"}},
+                {"type": "tool_use", "name": "Read", "id": "tool-1", "input": {"file_path": "/tmp/x"}},
             ]}
         })
-        # Text should be skipped (already streamed), Read is not Write/AskUser so also skipped
-        assert len(e4) == 0
+        # Text should be skipped (already streamed); tool summary updates the card with input.
+        assert len(e4) == 1
+        assert e4[0].type == EventType.TOOL_USE
+        assert e4[0].data["id"] == "tool-1"
 
         # 5. result
         e5 = adapter._parse_event({
             "type": "result", "result": "Done"
         })
-        assert e5[0].data["status"] == "completed"
+        assert e5[0].type == EventType.TURN_DONE

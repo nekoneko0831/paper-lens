@@ -18,7 +18,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, F
 from fastapi.responses import FileResponse, StreamingResponse
 import uvicorn
 
-from adapters import ClaudeCLIAdapter, SdkUrlAdapter, SessionEvent
+from adapters import ClaudeCLIAdapter, SessionEvent
 from adapters.base import EventType, QuestionData
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
@@ -33,8 +33,13 @@ PAPER_NOTES_DIR = PROJECT_DIR / "paper-notes"
 SERVER_PORT = int(os.environ.get("PORT", 8765))
 
 # Active sessions: session_id -> (adapter, last_active_timestamp)
-sessions: dict[str, tuple[SdkUrlAdapter, float]] = {}
+sessions: dict[str, tuple[ClaudeCLIAdapter, float]] = {}
 SESSION_TTL_SECONDS = 1800  # 30 minutes — covers long deep-learn turns + AskUserQuestion think time
+
+# Pending MCP-driven user questions: session_id -> {"future": Future, "questions": list}.
+# `mcp_server.py`'s `ask_user` tool POSTs to /api/mcp/ask-user, which awaits
+# the future. /api/answer completes it with the user's answer text.
+mcp_pending: dict[str, dict] = {}
 
 
 # ── Session cleanup ───────────────────────────────────────────────────
@@ -42,19 +47,28 @@ SESSION_TTL_SECONDS = 1800  # 30 minutes — covers long deep-learn turns + AskU
 async def _cleanup_expired_sessions() -> None:
     """Periodically remove sessions older than SESSION_TTL_SECONDS.
 
-    Sessions with an active CLI WebSocket are skipped: while Claude is
-    actively producing output (or parked on AskUserQuestion waiting for
-    user input), the CLI stays connected to /ws/cli/{sid} but does not
-    hit any HTTP endpoint, so its last_active timestamp would otherwise
-    age past TTL and the session would be reaped mid-turn.
+    Sessions with a live claude subprocess are skipped: while Claude is
+    actively producing output, the subprocess is running but no HTTP
+    endpoint is hit, so its last_active timestamp would otherwise age
+    past TTL and the session would be reaped mid-turn.
     """
+    def _is_session_in_use(adapter) -> bool:
+        # Live claude subprocess (mid-turn).
+        proc = getattr(adapter, "process", None)
+        if proc is not None and proc.returncode is None:
+            return True
+        # SSE stream(s) still attached — browser tab is open and listening.
+        if getattr(adapter, "_subscribers", 0) > 0:
+            return True
+        return False
+
     while True:
         await asyncio.sleep(60)  # check every minute
         now = time.time()
         expired = [
             sid for sid, (adapter, ts) in sessions.items()
             if now - ts > SESSION_TTL_SECONDS
-            and getattr(adapter, "_cli_ws", None) is None
+            and not _is_session_in_use(adapter)
         ]
         for sid in expired:
             adapter, _ = sessions.pop(sid)
@@ -391,7 +405,7 @@ async def start_session(
     pdf_url: str = Form(""),
     message: Optional[str] = Form(""),
 ):
-    """Start a new paper-lens session using --sdk-url adapter."""
+    """Start a new paper-lens session using the claude CLI stdio adapter."""
     # Backup existing output files before creating new ones
     if mode != "chat":
         _backup_if_exists(paper_name, mode)
@@ -399,7 +413,7 @@ async def start_session(
     # Build the prompt for paper-lens skill
     prompt = _build_prompt(paper_name, mode, pdf_url, message)
 
-    adapter = SdkUrlAdapter(working_dir=str(PROJECT_DIR), server_port=SERVER_PORT)
+    adapter = ClaudeCLIAdapter(working_dir=str(PROJECT_DIR))
     session_id = await adapter.start(prompt)
 
     sessions[session_id] = (adapter, time.time())
@@ -417,7 +431,7 @@ async def resume_session(
     The adapter is created with the claude_session_id pre-set so that
     the next send_message() call will use --resume to continue the conversation.
     """
-    adapter = SdkUrlAdapter(working_dir=str(PROJECT_DIR), server_port=SERVER_PORT)
+    adapter = ClaudeCLIAdapter(working_dir=str(PROJECT_DIR))
     adapter.claude_session_id = claude_session_id
     session_id = str(uuid4())
     adapter.session_id = session_id
@@ -439,8 +453,15 @@ async def sse_stream(session_id: str):
     sessions[session_id] = (adapter, time.time())
 
     async def event_generator():
+        # Track SSE attachment so TTL cleanup doesn't reap an actively-watched session.
+        if hasattr(adapter, "_subscribers"):
+            adapter._subscribers += 1
         try:
             async for event in adapter.events():
+                # Refresh activity timestamp on each event so a long-running
+                # session's last_active doesn't age out while events are flowing.
+                if session_id in sessions:
+                    sessions[session_id] = (adapter, time.time())
                 msg = _event_to_sse_data(event)
                 if msg is not None:
                     yield f"data: {json.dumps(msg, ensure_ascii=False)}\n\n"
@@ -449,6 +470,9 @@ async def sse_stream(session_id: str):
         except Exception as e:
             logger.error(f"SSE error for {session_id}: {e}")
             yield f"data: {json.dumps({'type': 'error', 'data': str(e)})}\n\n"
+        finally:
+            if hasattr(adapter, "_subscribers"):
+                adapter._subscribers = max(0, adapter._subscribers - 1)
 
     return StreamingResponse(
         event_generator(),
@@ -476,9 +500,19 @@ async def post_answer(session_id: str, payload: dict = Body(...)):
     try:
         if msg_type == "answer":
             answer_text = _format_answer(payload.get("data", {}))
-            # Prefer resolving a parked AskUserQuestion if one exists —
-            # this replies to the can_use_tool request with behavior=deny +
-            # message so Claude receives the answers as tool_result.
+            # Path 1 (preferred): if an MCP `ask_user` call is parked on
+            # /api/mcp/ask-user, complete its Future. The MCP server's HTTP
+            # request returns to claude as tool_result, claude continues.
+            mcp_entry = mcp_pending.get(session_id)
+            if mcp_entry and not mcp_entry["future"].done():
+                mcp_entry["future"].set_result(answer_text)
+                mcp_pending.pop(session_id, None)
+                logger.info(f"[MCP] answer routed to MCP waiter (session={session_id})")
+                return {"ok": True}
+
+            # Path 2 (legacy fallback): resolve a parked AskUserQuestion
+            # via stdin tool_result write — works if claude actually
+            # parked, which it doesn't reliably in stream-json mode.
             resolved = False
             if hasattr(adapter, "answer_question"):
                 try:
@@ -502,25 +536,55 @@ async def post_answer(session_id: str, payload: dict = Body(...)):
     return {"ok": True}
 
 
-# ── CLI-facing WebSocket (for --sdk-url) ──────────────────────────────
+# ── MCP server back-channel ───────────────────────────────────────────
 
-@app.websocket("/ws/cli/{session_id}")
-async def cli_websocket_endpoint(ws: WebSocket, session_id: str):
-    """WebSocket endpoint that the CLI subprocess connects to via --sdk-url."""
-    await ws.accept()
-    logger.info(f"CLI WebSocket connecting for session: {session_id}")
+@app.post("/api/mcp/ask-user")
+async def mcp_ask_user(payload: dict = Body(...)):
+    """Long-poll endpoint hit by `mcp_server.py` when claude calls ask_user.
+
+    Blocks (asyncio Future) until the user submits an answer through the
+    Web UI, then returns the answer text. If no one shows up, times out
+    after MCP_ASK_TIMEOUT_SECONDS so the tool call surfaces a clear error
+    rather than hanging the entire claude turn.
+    """
+    session_id = payload.get("session_id", "")
+    questions = payload.get("questions", [])
 
     entry = sessions.get(session_id)
     if not entry:
-        logger.warning(f"No session found for CLI connection: {session_id}")
-        await ws.close(code=4004, reason="Session not found")
-        return
-
+        raise HTTPException(404, "session not found")
     adapter, _ = entry
-    sessions[session_id] = (adapter, time.time())
 
-    # Hand off to the adapter's receive loop (blocks until CLI disconnects)
-    await adapter.on_cli_connect(ws)
+    # If something else is already parked on this session, knock it down
+    # rather than leaking the future. Shouldn't happen in normal flow.
+    prev = mcp_pending.pop(session_id, None)
+    if prev and not prev["future"].done():
+        prev["future"].set_exception(RuntimeError("superseded by new ask_user call"))
+
+    future: asyncio.Future = asyncio.get_event_loop().create_future()
+    mcp_pending[session_id] = {"future": future, "questions": questions}
+
+    # Push the question to the frontend through the existing event queue.
+    await adapter._event_queue.put(
+        SessionEvent(type=EventType.QUESTION, data=QuestionData(questions=questions))
+    )
+    logger.info(
+        f"[MCP] ask-user blocked: session={session_id} questions={len(questions)}"
+    )
+
+    try:
+        answer = await asyncio.wait_for(future, timeout=MCP_ASK_TIMEOUT_SECONDS)
+        logger.info(
+            f"[MCP] ask-user resolved: session={session_id} answer={answer[:80]!r}"
+        )
+        return {"answer": answer}
+    except asyncio.TimeoutError:
+        mcp_pending.pop(session_id, None)
+        logger.warning(f"[MCP] ask-user timed out: session={session_id}")
+        raise HTTPException(504, f"user did not answer within {MCP_ASK_TIMEOUT_SECONDS}s")
+
+
+MCP_ASK_TIMEOUT_SECONDS = 1800  # 30 min — long enough for real reading sessions
 
 
 # ── Helpers (unchanged) ───────────────────────────────────────────────
@@ -598,7 +662,13 @@ def _build_prompt(paper_name: str, mode: str, pdf_url: str, message: str = "") -
         else:
             source = paper_name
 
-    return f"/paper-lens {source}\n选择：{mode_text}"
+    return (
+        f"/paper-lens {source}\n选择：{mode_text}\n\n"
+        "[Web UI 工具约束]\n"
+        "- 凡是 skill 文档里写的 `AskUserQuestion`，本环境下一律改用 "
+        "`mcp__paper_lens__ask_user`（入参 schema 完全一致：questions=[{question, header, multiSelect, options:[{label, description}]}]）。"
+        "本环境的 `AskUserQuestion` 不会真的等待用户回答，会被自动跳过。"
+    )
 
 
 def _format_answer(answer_data) -> str:

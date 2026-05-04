@@ -207,13 +207,13 @@ class TestSSEEndpoint:
         """SSE endpoint should return text/event-stream for a valid session."""
         # We need a mock adapter in the sessions dict
         from server import sessions
-        from adapters.sdk_url import SdkUrlAdapter
+        from adapters.claude_cli import ClaudeCLIAdapter
         from adapters.base import SessionEvent, EventType
         import asyncio
         import time
 
         # Create a mock adapter that yields one DONE event
-        adapter = MagicMock(spec=SdkUrlAdapter)
+        adapter = MagicMock(spec=ClaudeCLIAdapter)
 
         async def mock_events():
             yield SessionEvent(type=EventType.DONE)
@@ -252,11 +252,11 @@ class TestAnswerEndpoint:
     def test_accepts_answer_for_valid_session(self):
         """POST /api/answer should accept messages for a valid session."""
         from server import sessions
-        from adapters.sdk_url import SdkUrlAdapter
+        from adapters.claude_cli import ClaudeCLIAdapter
         import asyncio
         import time
 
-        adapter = MagicMock(spec=SdkUrlAdapter)
+        adapter = MagicMock(spec=ClaudeCLIAdapter)
         adapter.send_message = AsyncMock()
 
         test_sid = "__test-answer-session__"
@@ -276,11 +276,12 @@ class TestAnswerEndpoint:
     def test_accepts_structured_answer(self):
         """POST /api/answer with type=answer should format answer data."""
         from server import sessions
-        from adapters.sdk_url import SdkUrlAdapter
+        from adapters.claude_cli import ClaudeCLIAdapter
         import time
 
-        adapter = MagicMock(spec=SdkUrlAdapter)
+        adapter = MagicMock(spec=ClaudeCLIAdapter)
         adapter.send_message = AsyncMock()
+        adapter.answer_question = AsyncMock(return_value=False)
 
         test_sid = "__test-answer-structured__"
         sessions[test_sid] = (adapter, time.time())

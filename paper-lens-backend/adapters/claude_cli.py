@@ -1,10 +1,27 @@
-"""Claude Code CLI adapter - spawns claude subprocess with stream-json I/O."""
+"""Claude Code CLI adapter — spawns a long-lived claude subprocess in stream-json mode
+with a custom MCP server (`mcp_server.py`) registered for synchronous user prompts.
+
+Why MCP for user prompts?
+- AskUserQuestion in `claude -p --input-format stream-json` does NOT actually
+  block on tool_use waiting for a tool_result — claude advances on its own
+  with a default response, then any stdin write is treated as a fresh user
+  message rather than the answer. Confirmed empirically (see CLAUDE.md).
+- MCP tool calls ARE truly synchronous: claude blocks the assistant turn
+  until the MCP server returns. We exploit this by having `mcp_server.py`'s
+  `ask_user` tool HTTP-POST to backend, where the request waits on an
+  asyncio.Future that the user's `/api/answer` POST completes.
+
+Why stream-json mode at all?
+- One subprocess covers the whole session: follow-up user messages are written
+  to stdin as newline-delimited JSON, no `--resume` churn between turns.
+"""
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
 import os
+from pathlib import Path
 from typing import AsyncIterator, Optional
 from uuid import uuid4
 
@@ -12,14 +29,12 @@ from .base import SessionInterface, SessionEvent, EventType, QuestionData
 
 logger = logging.getLogger(__name__)
 
+# Path to our MCP server, sibling of this file's parent (paper-lens-backend/).
+_MCP_SERVER_PATH = str(Path(__file__).resolve().parent.parent / "mcp_server.py")
+
 
 class ClaudeCLIAdapter(SessionInterface):
-    """Adapter that wraps Claude Code CLI for local use.
-
-    Uses --print --output-format stream-json --verbose --include-partial-messages
-    for real-time token-by-token streaming.
-    Multi-turn conversations use --resume with session IDs.
-    """
+    """Long-lived claude subprocess driven via stream-json on stdin/stdout."""
 
     def __init__(self, working_dir: str):
         self.working_dir = working_dir
@@ -29,6 +44,8 @@ class ClaudeCLIAdapter(SessionInterface):
         self._event_queue: asyncio.Queue[SessionEvent] = asyncio.Queue()
         self._reader_task: asyncio.Task | None = None
         self._has_streaming: bool = False  # Set True when we see stream_event
+        self._subscribers: int = 0  # SSE consumers currently attached; nonzero blocks TTL reap
+        self._pending_question_id: str | None = None  # tool_use_id of a parked AskUserQuestion
 
     async def start(self, prompt: str) -> str:
         self.session_id = str(uuid4())
@@ -37,23 +54,33 @@ class ClaudeCLIAdapter(SessionInterface):
         return self.session_id
 
     async def send_message(self, message: str) -> None:
-        """Send a follow-up message using --resume."""
-        # Kill previous process if still running
-        await self._cleanup_process()
-        if not self.claude_session_id:
-            raise RuntimeError("No active claude session to resume")
-        # Drain stale events but keep the same queue reference
-        # (SSE generators hold a reference to self._event_queue — replacing it
-        # would cause reconnected SSE streams to read from a dead queue)
-        while not self._event_queue.empty():
-            try:
-                self._event_queue.get_nowait()
-            except asyncio.QueueEmpty:
-                break
+        """Send a follow-up user message on stdin (claude is still running)."""
+        # If somehow the process died (crash, manual kill, etc.), respawn with --resume.
+        if not self._process_alive():
+            self._has_streaming = False
+            await self._spawn_claude(message, resume=True)
+            return
         self._has_streaming = False
-        await self._spawn_claude(message, resume=True)
+        self._pending_question_id = None  # any new user message implicitly cancels the parked question
+        await self._send_user_message(message)
+
+    async def answer_question(self, answer_text: str) -> bool:
+        """Resolve a parked AskUserQuestion by writing a tool_result on stdin.
+
+        Returns True if there was a parked question and it was resolved; False
+        otherwise (caller falls back to send_message).
+        """
+        if not self._pending_question_id or not self._process_alive():
+            return False
+        tool_use_id = self._pending_question_id
+        self._pending_question_id = None
+        await self._send_tool_result(tool_use_id, answer_text)
+        return True
 
     async def events(self) -> AsyncIterator[SessionEvent]:
+        # TURN_DONE means "this assistant turn ended"; the session is still alive
+        # waiting for the next user message. Only DONE (explicit stop / process
+        # exit) or ERROR closes the SSE stream.
         while True:
             event = await self._event_queue.get()
             yield event
@@ -61,39 +88,104 @@ class ClaudeCLIAdapter(SessionInterface):
                 break
 
     async def stop(self) -> None:
+        # Close stdin so claude finishes pending work and exits cleanly; fall
+        # back to terminate/kill if it doesn't shut down within timeout.
+        if self.process and self.process.stdin and not self.process.stdin.is_closing():
+            try:
+                self.process.stdin.close()
+            except Exception:
+                pass
         await self._cleanup_process()
+        await self._event_queue.put(SessionEvent(type=EventType.DONE))
 
-    async def _spawn_claude(self, prompt: str, resume: bool = False) -> None:
+    # ── internals ────────────────────────────────────────────────────────
+
+    def _process_alive(self) -> bool:
+        return self.process is not None and self.process.returncode is None
+
+    async def _spawn_claude(self, initial_message: str, resume: bool = False) -> None:
+        # Inline MCP config: registers our paper_lens server (provides
+        # `ask_user`). Session id is passed through env so the server knows
+        # which backend session to bind questions to.
+        backend_port = int(os.environ.get("PORT", 8765))
+        mcp_config = {
+            "mcpServers": {
+                "paper_lens": {
+                    "command": "python3",
+                    "args": [_MCP_SERVER_PATH],
+                    "env": {
+                        "PAPER_LENS_SESSION_ID": self.session_id or "",
+                        "PAPER_LENS_BACKEND": f"http://localhost:{backend_port}",
+                    },
+                }
+            }
+        }
+
         cmd = [
             "claude",
             "-p",
             "--output-format", "stream-json",
+            "--input-format", "stream-json",
             "--verbose",
             "--include-partial-messages",
+            "--mcp-config", json.dumps(mcp_config, ensure_ascii=False),
+            # AskUserQuestion is intentionally OMITTED — built-in version
+            # does not park reliably in -p stream-json mode. Claude must
+            # use mcp__paper_lens__ask_user instead, enforced by prompt.
             "--allowedTools",
-            "Read,Write,Edit,Bash,Glob,Grep,Skill,Agent,AskUserQuestion,ToolSearch",
+            "Read,Write,Edit,Bash,Glob,Grep,Skill,Agent,ToolSearch,mcp__paper_lens__ask_user",
         ]
-
         if resume and self.claude_session_id:
             cmd.extend(["--resume", self.claude_session_id])
 
-        # Pass prompt via stdin to avoid --allowedTools consuming it as a tool name
-        logger.info(f"Spawning claude: {' '.join(cmd[:6])}...")
-
+        logger.info(f"Spawning claude (stream-json + MCP paper_lens): session={self.session_id}")
         self.process = await asyncio.create_subprocess_exec(
             *cmd,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=self.working_dir,
-            limit=4 * 1024 * 1024,  # 4MB line buffer (default 64KB too small for verbose output)
+            limit=4 * 1024 * 1024,  # 4MB line buffer
         )
-        # Write prompt to stdin and close it
-        if self.process.stdin:
-            self.process.stdin.write(prompt.encode("utf-8"))
-            self.process.stdin.close()
-
+        # Send the initial user message via stream-json. Stay open for follow-ups.
+        await self._send_user_message(initial_message)
         self._reader_task = asyncio.create_task(self._read_output())
+
+    async def _send_user_message(self, text: str) -> None:
+        """Write a plain user message to claude's stdin."""
+        envelope = {
+            "type": "user",
+            "message": {"role": "user", "content": text},
+        }
+        await self._write_stdin_json(envelope)
+
+    async def _send_tool_result(self, tool_use_id: str, content: str) -> None:
+        """Write a tool_result for a parked tool call to claude's stdin."""
+        logger.info(f"[AUQ] tool_result sent: tool_use_id={tool_use_id} content={content[:120]!r}")
+        envelope = {
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": tool_use_id,
+                        "content": content,
+                    }
+                ],
+            },
+        }
+        await self._write_stdin_json(envelope)
+
+    async def _write_stdin_json(self, obj: dict) -> None:
+        if not self.process or not self.process.stdin:
+            return
+        line = json.dumps(obj, ensure_ascii=False) + "\n"
+        try:
+            self.process.stdin.write(line.encode("utf-8"))
+            await self.process.stdin.drain()
+        except (BrokenPipeError, ConnectionResetError) as e:
+            logger.warning(f"stdin write failed (claude likely exited): {e}")
 
     async def _read_output(self) -> None:
         """Read stream-json output from claude and parse into events."""
@@ -105,26 +197,27 @@ class ClaudeCLIAdapter(SessionInterface):
                 line = line.decode("utf-8").strip()
                 if not line:
                     continue
-
                 try:
                     data = json.loads(line)
                 except json.JSONDecodeError:
                     logger.warning(f"Non-JSON output: {line[:100]}")
                     continue
-
-                events = self._parse_event(data)
-                for event in events:
+                for event in self._parse_event(data):
                     await self._event_queue.put(event)
 
-            # Process ended
+            # stdout closed → process exited.
             return_code = await self.process.wait()
             if return_code != 0 and self.process.stderr:
                 stderr = await self.process.stderr.read()
                 error_msg = stderr.decode("utf-8").strip()
                 if error_msg:
-                    logger.error(f"Claude stderr: {error_msg}")
-
-            await self._event_queue.put(SessionEvent(type=EventType.DONE))
+                    logger.error(f"Claude stderr (rc={return_code}): {error_msg}")
+                await self._event_queue.put(
+                    SessionEvent(type=EventType.ERROR, data=error_msg or f"claude exited with code {return_code}")
+                )
+            else:
+                # Clean exit (stdin closed by stop() or peer hangup) — session is over.
+                await self._event_queue.put(SessionEvent(type=EventType.DONE))
 
         except Exception as e:
             logger.error(f"Error reading claude output: {e}")
@@ -133,15 +226,7 @@ class ClaudeCLIAdapter(SessionInterface):
             )
 
     def _parse_event(self, data: dict) -> list[SessionEvent]:
-        """Parse a single stream-json event into SessionEvents.
-
-        With --include-partial-messages, we get two types of events:
-        1. stream_event — real-time deltas (text chunks, tool starts)
-        2. assistant — complete turn summary (tool inputs with full args)
-
-        Strategy: use stream_events for real-time UI, assistant for structured data
-        (AskUserQuestion questions, Write/Edit file paths).
-        """
+        """Parse a single stream-json event into SessionEvents."""
         events = []
         event_type = data.get("type")
 
@@ -167,7 +252,6 @@ class ClaudeCLIAdapter(SessionInterface):
             message = data.get("message", {})
             content_blocks = message.get("content", [])
 
-            # Emit usage if present (for token meter)
             usage = message.get("usage", {})
             if usage:
                 events.append(SessionEvent(
@@ -191,16 +275,36 @@ class ClaudeCLIAdapter(SessionInterface):
                     tool_input = block.get("input", {})
                     tool_id = block.get("id", "")
 
-                    # AskUserQuestion is handled specially
                     if tool_name == "AskUserQuestion":
+                        # Legacy path: claude shouldn't be calling this anymore
+                        # (it's not in --allowedTools), but if a stale skill
+                        # somehow invokes it we still emit a QUESTION event.
+                        self._pending_question_id = tool_id
                         questions = tool_input.get("questions", [])
+                        logger.warning(
+                            f"[AUQ-LEGACY] AskUserQuestion called despite being disallowed. "
+                            f"tool_use_id={tool_id} questions={len(questions)}"
+                        )
                         events.append(SessionEvent(
                             type=EventType.QUESTION,
                             data=QuestionData(questions=questions)
                         ))
                         continue
 
-                    # File saving toast (on top of generic tool_use)
+                    if tool_name == "mcp__paper_lens__ask_user":
+                        # The MCP server pushes QUESTION events to the SSE
+                        # stream itself (via /api/mcp/ask-user → backend). The
+                        # tool_use card here is just visual feedback that the
+                        # tool was called; suppress the duplicate question render.
+                        questions = tool_input.get("questions", [])
+                        logger.info(
+                            f"[MCP-AUQ] mcp__paper_lens__ask_user invoked: "
+                            f"tool_use_id={tool_id} questions={len(questions)}"
+                        )
+                        # Skip the generic TOOL_USE emit too — the user sees
+                        # the question popup, not a "tool used" card.
+                        continue
+
                     if tool_name in ("Write", "Edit"):
                         file_path = tool_input.get("file_path", "")
                         if file_path:
@@ -209,16 +313,14 @@ class ClaudeCLIAdapter(SessionInterface):
                                 data={"path": file_path, "tool": tool_name}
                             ))
 
-                    # Always emit generic TOOL_USE with full input + id so the
-                    # frontend can render a rich tool card and match it with a
-                    # later tool_result by id.
                     events.append(SessionEvent(
                         type=EventType.TOOL_USE,
                         data={"tool": tool_name, "input": tool_input, "id": tool_id},
                     ))
 
         elif event_type == "user":
-            # User messages from the CLI contain tool_result blocks
+            # User messages echoed back by the CLI — typically tool_result blocks
+            # (either ours via _send_tool_result, or the CLI's own builtin tool execution).
             message = data.get("message", {})
             content_blocks = message.get("content", [])
             if isinstance(content_blocks, list):
@@ -227,7 +329,6 @@ class ClaudeCLIAdapter(SessionInterface):
                         tool_id = block.get("tool_use_id", "")
                         is_error = bool(block.get("is_error", False))
                         raw_content = block.get("content", "")
-                        # content can be string or list[{type:"text", text:"..."}]
                         if isinstance(raw_content, list):
                             parts = []
                             for p in raw_content:
@@ -248,12 +349,15 @@ class ClaudeCLIAdapter(SessionInterface):
                         ))
 
         elif event_type == "result":
-            result_text = data.get("result", "")
-            if result_text:
-                events.append(SessionEvent(
-                    type=EventType.STATUS,
-                    data={"status": "completed", "result_preview": result_text[:200]}
-                ))
+            # End of one assistant turn. Session stays alive on stdin waiting for
+            # the next user message. Reset streaming flag so the next turn's
+            # text comes in fresh.
+            logger.info(
+                f"[AUQ] result/TURN_DONE: pending_question={self._pending_question_id} "
+                f"is_error={data.get('is_error')} subtype={data.get('subtype')}"
+            )
+            self._has_streaming = False
+            events.append(SessionEvent(type=EventType.TURN_DONE))
 
         return events
 
@@ -263,7 +367,6 @@ class ClaudeCLIAdapter(SessionInterface):
         inner_type = inner.get("type")
 
         if inner_type == "message_start":
-            # New assistant turn — clear tool indicator & reset text
             events.append(SessionEvent(
                 type=EventType.STATUS, data={"status": "new_turn"}
             ))
@@ -273,10 +376,11 @@ class ClaudeCLIAdapter(SessionInterface):
             if block.get("type") == "tool_use":
                 tool_name = block.get("name", "")
                 tool_id = block.get("id", "")
+                # Suppress the streaming tool_use card for the MCP question
+                # tool — the user already sees the question popup.
+                if tool_name == "mcp__paper_lens__ask_user":
+                    return events
                 if tool_name:
-                    # Emit partial tool_use with id so the frontend can create
-                    # a card immediately; the full input is filled in later
-                    # by the assistant complete block event.
                     events.append(SessionEvent(
                         type=EventType.TOOL_USE,
                         data={"tool": tool_name, "id": tool_id}
@@ -298,19 +402,6 @@ class ClaudeCLIAdapter(SessionInterface):
                         type=EventType.THINKING_DELTA, data=text
                     ))
 
-        elif inner_type == "content_block_stop":
-            # Content block finished — could be text or tool_use.
-            # Tool indicator will be cleared by next text_delta or new_turn.
-            pass
-
-        elif inner_type == "message_delta":
-            # Contains stop_reason — turn is ending
-            pass
-
-        elif inner_type == "message_stop":
-            # Turn fully complete — assistant summary follows
-            pass
-
         return events
 
     async def _cleanup_process(self) -> None:
@@ -323,7 +414,8 @@ class ClaudeCLIAdapter(SessionInterface):
 
         if self.process:
             try:
-                self.process.terminate()
+                if self.process.returncode is None:
+                    self.process.terminate()
                 await asyncio.wait_for(self.process.wait(), timeout=5.0)
             except (asyncio.TimeoutError, ProcessLookupError):
                 try:

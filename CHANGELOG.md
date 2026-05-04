@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.4.0 (2026-05-04)
+
+### Fixes
+- Replaced the old Web UI Claude bridge with a long-lived `claude -p --input-format stream-json` subprocess. Follow-up messages now stay in one session instead of respawning per turn.
+- Added a small MCP back-channel for structured user questions. Browser question cards now truly block the Claude turn until the user answers, avoiding the `AskUserQuestion` auto-skip behavior in headless stream-json mode.
+- Fixed paper titles containing `:` in the frontend session key parser.
+- Hardened Markdown rendering: long URLs/paths wrap inside chat bubbles, single-dollar text no longer triggers noisy KaTeX parsing, and invalid math no longer stalls the page.
+- Sanitized restored browser session history so stale or malformed tool/question events cannot white-screen the UI after refresh.
+- Fixed React 19 lint blockers in the Web UI and updated backend tests for the new turn lifecycle.
+
+### Notes
+- The backend still requires a logged-in Claude Code CLI and must still be run as the normal user, not with `sudo`.
+- `paper-lens-web/.env.local.example` is now explicitly tracked; copy it to `.env.local` for direct browser-to-backend SSE calls.
+
 ## v1.3.1 (2026-04-26)
 
 ### Bug fixes
@@ -19,7 +33,7 @@
 - `paper-lens-web/.env.local.example` added so users know which env var to set without leaking the maintainer's local config.
 
 ### Notes
-- The backend spawns `claude --sdk-url ...` as a subprocess. It inherits the invoking shell's credentials, so the operator must have already completed `claude` `/login`. Do not start the backend with `sudo`.
+- The backend spawns a Claude Code subprocess. It inherits the invoking shell's credentials, so the operator must have already completed `claude` `/login`. Do not start the backend with `sudo`.
 
 ## v1.2.0 (2026-04-17)
 

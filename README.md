@@ -203,7 +203,7 @@ The CLI skill works on its own. If you want a chat-style browser UI, this repo a
 CLI skill 本身已可独立使用。如果你想要浏览器聊天界面，仓库还提供可选的 Web UI：FastAPI 后端封装 skill，Next.js 前端。
 
 ```
-paper-lens-backend/   # FastAPI server (port 8765) — wraps the skill via Claude Code CLI
+paper-lens-backend/   # FastAPI server (port 8765) — drives Claude Code CLI via stream-json + MCP
 paper-lens-web/       # Next.js app (port 3000)   — chat UI, paper browser
 ```
 
@@ -217,6 +217,10 @@ paper-lens-web/       # Next.js app (port 3000)   — chat UI, paper browser
 > ⚠️ Do **not** run the backend with `sudo`. The backend spawns a `claude` subprocess that inherits the invoking user's credentials. A `sudo`-spawned subprocess won't find your login token and every chat will fail with `Not logged in · Please run /login`.
 >
 > ⚠️ **不要**用 `sudo` 启动后端。后端会 spawn `claude` 子进程，并继承调用者的凭证；用 `sudo` 起的子进程拿不到你的登录态，每次对话都会失败。
+
+The backend keeps one long-lived Claude subprocess per browser session. Structured questions in the UI are routed through a tiny local MCP server so the agent truly waits for the user's answer before continuing.
+
+后端会为每个浏览器会话保留一个长寿命 Claude 子进程；结构化选择题通过本地 MCP 小服务中转，确保模型真的等用户回答后再继续。
 
 ### Install / 安装
 
