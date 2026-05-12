@@ -13,6 +13,7 @@
 ```
 paper-notes/<name>/
 ├── speed-read.md     # 速览笔记
+├── paper-reading.md  # 精读文档
 ├── deep-learn.md     # 学习笔记
 └── slides-content.md # 展示内容
 ```

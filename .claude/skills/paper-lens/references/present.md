@@ -2,15 +2,60 @@
 
 ## 目标
 
-帮用户准备一场论文讲解的 slides，输出结构化的内容文档，可直接对接 `/frontend-slides` 生成**带原文图片**的 HTML 演示文稿。
+帮用户准备一场论文讲解的 slides，输出结构化的内容文档（`slides-content.md`，含 `figures/` 路径引用）。`slides-content.md` 生成后，必须交给 `frontend-slides` skill 生成最终 HTML 演示文稿；paper-lens 不自己开发 HTML deck。
 
 ## 核心原则
 
 1. **用户主导**：每一页的内容都和用户讨论确认，不替用户做决定
 2. **图文并茂**：论文原图直接引用到 slides，不只是文字
 3. **分步推进**：规划 → 图表映射 → 大纲 → 逐页确认 → 输出文档
+4. **职责边界**：paper-lens 只产出 `slides-content.md`；HTML 演示稿由 `frontend-slides` skill 负责
 
 ---
+
+## frontend-slides 可用性检查（展示模式必须执行）
+
+进入展示模式后，先确认 `frontend-slides` skill 是否可用：
+
+```bash
+FRONTEND_SLIDES_SKILL=""
+for d in \
+  ".claude/skills/frontend-slides" \
+  ".agents/skills/frontend-slides" \
+  "$HOME/.claude/skills/frontend-slides"
+do
+  if [ -f "$d/SKILL.md" ]; then
+    FRONTEND_SLIDES_SKILL="$d"
+    break
+  fi
+done
+echo "$FRONTEND_SLIDES_SKILL"
+```
+
+处理规则：
+
+- 如果找到 `frontend-slides`：继续展示模式；保存 `slides-content.md` 后调用该 skill 生成 HTML。
+- 如果项目根存在 `.agents/skills/frontend-slides/SKILL.md`，但 `.claude/skills/frontend-slides/` 不存在：先同步到 `.claude/skills/frontend-slides/`，再继续。
+- 如果完全找不到：继续先生成 `slides-content.md`，但保存后提醒用户先安装 `frontend-slides`；不要退而求其次自己写 HTML。
+
+## 内容基础（展示模式必须基于精读）
+
+展示模式的主要理解来源必须优先使用 `paper-reading.md`，而不是 `deep-learn.md`。
+
+读取优先级：
+
+1. `paper-notes/<name>/paper-reading.md`：主来源。用于抽取主问题链、核心结论、方法框架、关键图表解释、实验结论、局限与启发。
+2. `paper-notes/<name>/slides-content.md`：如果已有旧稿，只作为历史参考，不得直接拼接复用。
+3. `paper-notes/<name>/speed-read.md`：只作为快速校验，不得替代精读理解。
+4. `paper-notes/<name>/deep-learn.md`：只作为补充材料，尤其用于大白话解释、术语解释和用户之前指定的关注点。
+5. `paper-notes/<name>/extracted-text.md`：事实兜底，用于核对数字、图表 caption、公式和实验设置。
+
+执行规则：
+
+- 如果 `paper-reading.md` 已存在：先从中提炼“展示叙事线”，再进入展示规划和图表映射。
+- 如果 `paper-reading.md` 不存在：不要默认转向学习模式；先提示用户建议生成精读文档，或在展示流程前按精读策略补一版 `paper-reading.md`。
+- Slides 大纲必须能追溯到精读文档的主线：为什么这个问题重要、论文怎么做、关键证据是什么、局限在哪里、对听众有什么启发。
+- Speaker Notes 可以吸收 `deep-learn.md` 的大白话解释，但页面正文和结构不应以学习模式笔记为主。
 
 ## 流程（多轮交互）
 
@@ -231,11 +276,11 @@ cp paper-notes/<name>/images/<source>.png paper-notes/<name>/figures/fig1-<desc>
 
 ---
 
-## 图片嵌入到 HTML 演示文稿
+## 后续 HTML 演示文稿
 
-当用户调用 `/frontend-slides` 生成 HTML 时，需要将 `figures/` 中的图片嵌入到演示文稿中。
+保存 `slides-content.md` 后，下一步必须调用 `frontend-slides`。图片 base64 嵌入、响应式排版、键盘翻页、Playwright 视口验证都归 `frontend-slides` 负责。
 
-### 嵌入方式：Base64 编码
+### 图片嵌入要求
 
 为了保证 HTML 文件完全自包含（单文件可分享），将图片转为 base64 嵌入：
 
@@ -252,7 +297,7 @@ def img_to_base64(img_path):
     return f"data:{mime_type};base64,{data}"
 ```
 
-在 HTML 中使用：
+在 HTML 中使用时应保持图表可读：
 
 ```html
 <img src="data:image/png;base64,..." alt="Figure 1: 系统架构图"
@@ -279,12 +324,12 @@ def img_to_base64(img_path):
 Slides 内容文档已保存到 paper-notes/<name>/slides-content.md
 论文图表已筛选到 paper-notes/<name>/figures/
 
-下一步：你可以用 /frontend-slides 来生成带原文图片的 HTML 演示文稿。
+下一步：我会使用 frontend-slides skill 生成带原文图片的 HTML 演示文稿；paper-lens 不自己开发最终 deck。
 
 提示：
-1. 调用 /frontend-slides 后，选择"新建演示文稿"
+1. 调用 frontend-slides 后，选择"新建演示文稿"
 2. 提供 slides-content.md 作为内容输入
 3. figures/ 中的图片会被 base64 编码嵌入 HTML，生成完全自包含的单文件
-4. **重要**：确保 /frontend-slides 执行 Phase 2 Style Discovery，必须用 AskUserQuestion 询问用户视觉风格偏好，不得跳过或自动选择
+4. **重要**：确保 frontend-slides 执行 Phase 2 Style Discovery，必须用 AskUserQuestion 询问用户视觉风格偏好，不得跳过或自动选择
 5. 生成后可以在浏览器中打开预览
 ```
