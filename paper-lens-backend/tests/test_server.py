@@ -44,6 +44,7 @@ class TestPaperList:
             assert "name" in paper
             assert "files" in paper
             assert "has_speed_read" in paper
+            assert "has_paper_reading" in paper
             assert "has_deep_learn" in paper
             assert "has_slides" in paper
             assert "has_presentation" in paper
@@ -59,6 +60,78 @@ class TestPaperList:
             if paper["has_presentation"]:
                 assert paper["presentation_file"] is not None
                 assert paper["presentation_file"].endswith(".html")
+
+    def test_paper_reading_detected_and_sorted(self):
+        """paper-reading.md should be detected and sorted after speed-read."""
+        import shutil
+
+        test_dir = PAPER_NOTES_DIR / "test-paper-reading-mode"
+        shutil.rmtree(test_dir, ignore_errors=True)
+        test_dir.mkdir(parents=True)
+        try:
+            for name in [
+                "paper.pdf",
+                "slides-content.md",
+                "deep-learn.md",
+                "paper-reading.md",
+                "speed-read.md",
+                "extracted-text.md",
+            ]:
+                (test_dir / name).write_text("x", encoding="utf-8")
+
+            resp = client.get("/api/papers")
+            assert resp.status_code == 200
+            paper = next(p for p in resp.json()["papers"] if p["name"] == test_dir.name)
+
+            assert paper["has_paper_reading"] is True
+            assert "paper-reading.md" in paper["note_files"]
+            assert "extracted-text.md" not in paper["note_files"]
+            assert paper["note_files"][:4] == [
+                "speed-read.md",
+                "paper-reading.md",
+                "deep-learn.md",
+                "slides-content.md",
+            ]
+        finally:
+            shutil.rmtree(test_dir, ignore_errors=True)
+
+
+class TestPaperReadingMode:
+    def test_backup_if_exists_versions_paper_reading(self):
+        """paper-reading.md should be backed up with versioned names."""
+        import shutil
+        from server import _backup_if_exists
+
+        test_dir = PAPER_NOTES_DIR / "test-paper-reading-backup"
+        shutil.rmtree(test_dir, ignore_errors=True)
+        test_dir.mkdir(parents=True)
+        try:
+            (test_dir / "paper-reading.md").write_text("first", encoding="utf-8")
+            _backup_if_exists(test_dir.name, "paper-reading")
+            assert not (test_dir / "paper-reading.md").exists()
+            assert (test_dir / "paper-reading-v1.md").read_text(encoding="utf-8") == "first"
+
+            (test_dir / "paper-reading.md").write_text("second", encoding="utf-8")
+            _backup_if_exists(test_dir.name, "paper-reading")
+            assert (test_dir / "paper-reading-v2.md").read_text(encoding="utf-8") == "second"
+        finally:
+            shutil.rmtree(test_dir, ignore_errors=True)
+
+    def test_build_prompt_uses_paper_reading_mode_label(self):
+        """paper-reading mode should ask the skill for 论文级精读文档."""
+        import shutil
+        from server import _build_prompt
+
+        test_dir = PAPER_NOTES_DIR / "test-paper-reading-prompt"
+        shutil.rmtree(test_dir, ignore_errors=True)
+        test_dir.mkdir(parents=True)
+        try:
+            (test_dir / "paper.pdf").write_bytes(b"%PDF-1.0\n")
+            prompt = _build_prompt(test_dir.name, "paper-reading", "")
+            assert "/paper-lens" in prompt
+            assert "选择：论文级精读文档" in prompt
+        finally:
+            shutil.rmtree(test_dir, ignore_errors=True)
 
 
 class TestFileAccess:

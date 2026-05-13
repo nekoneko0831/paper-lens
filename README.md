@@ -237,31 +237,30 @@ npm install
 
 ### Run / 启动
 
-Open two terminals:
+Open one terminal:
 
 ```bash
-# Terminal 1 — backend
-cd paper-lens-backend && python3 server.py
-
-# Terminal 2 — frontend
-cd paper-lens-web && npm run dev
+cd paper-lens-web
+npm run dev
 ```
 
 Then open http://localhost:3000 in your browser.
 
+`npm run dev` starts the FastAPI backend behind the frontend and restarts it if it exits while the frontend dev server is still running. In normal use, users only deal with the frontend URL.
+
 ### Skill auto-detection / Skill 自动探测
 
-When the skill loads, **Phase -1** detects whether ports 3000 and 8765 are alive and tells you the URL — no auto-launch, no auto-open. If the Web UI is running you'll see a one-line hint and can keep using the CLI or switch to the browser as you wish.
+When the skill loads, **Phase -1** detects whether ports 3000 and 8765 are alive and tells you the URL — no auto-open. If the Web UI is not running, the suggested startup path is the single frontend command above.
 
-Skill 加载时，**Phase -1** 会探测 3000 和 8765 端口，活着就给你一行 URL 提示——不会自动启动也不会自动打开浏览器。
+Skill 加载时，**Phase -1** 会探测 3000 和 8765 端口，活着就给你一行 URL 提示；如果没启动，只提示上面的一条前端启动命令。
 
 ---
 
 ## HTML Slides / HTML 演示文稿
 
-Present mode generates `slides-content.md` with figure references. To convert into a self-contained HTML presentation, use a slides tool (e.g., `frontend-slides` for Claude Code) or any Markdown-to-slides tool.
+Present mode generates `slides-content.md` with figure references. To convert into a self-contained HTML presentation, hand it to the `frontend-slides` skill; paper-lens should not build HTML decks itself.
 
-展示模式生成 `slides-content.md`。要转换为 HTML 演示文稿，可以使用 slides 工具（如 Claude Code 的 `frontend-slides` skill）或任何 Markdown 转 slides 工具。
+展示模式生成 `slides-content.md`。要转换为 HTML 演示文稿，交给 `frontend-slides` skill；paper-lens 自己不写 HTML deck。
 
 ## License
 
